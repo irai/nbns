@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	netbiosMaxNameLen = 16
 	//     1   1   1   1   1   1
 	//     5   4   3   2   1   0   9   8   7   6   5   4   3   2   1   0
 	//   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
@@ -116,28 +117,25 @@ func newNBNSNameQuery(netbiosName string) (r *nodeStatusPacket) {
 //
 //
 func encodeNetBiosName(name string) string {
-	const MaxNameLen = 0x20 // 32 bytes
 
-	if len(name) > 15 {
-		name = name[:15] // truncate if name too long
+	// Netbios name is limited to 15 characters long
+	if len(name) > netbiosMaxNameLen {
+		name = name[:netbiosMaxNameLen] // truncate if name too long
 	}
 
+	if len(name) < netbiosMaxNameLen {
+		name = name + strings.Repeat(" ", netbiosMaxNameLen-len(name))
+	}
 	buffer := bytes.Buffer{}
 
-	// Name len = 32 bytes
-	buffer.Write([]byte{MaxNameLen})
+	// Name len = 16 * 2 bytes format
+	buffer.Write([]byte{netbiosMaxNameLen * 2})
 
 	for i := range name {
 		var store [2]byte
 		store[0] = 'A' + (name[i] >> 4)
 		store[1] = 'A' + (name[i] & 0x0f)
 		buffer.Write(store[:])
-	}
-
-	// Pad remaining space
-	for i := 0; i < 16-len(name); i++ {
-		buffer.Write([]byte{'A', 'A'})
-		// encodeNetBiosChar(&buffer, PaddingChar)
 	}
 
 	// Final name - len 0x00 means no more names
@@ -169,6 +167,7 @@ func encodeNetBiosName(name string) string {
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 func (r *nodeStatusPacket) ToWireFormat(buf *bytes.Buffer) error {
 
+	// var word uint16 = r.Response | r.Opcode | r.NMFlags | r.Rcode
 	var word uint16 = r.Response | r.Opcode | r.NMFlags | r.Rcode
 
 	binary.Write(buf, binary.BigEndian, r.TrnId)
@@ -189,6 +188,7 @@ func fromWireFormat(buffer *bytes.Buffer) (hdr *nodeStatusPacket) {
 	var word uint16
 
 	hdr = new(nodeStatusPacket)
+	log.Debugf("NBNS trnid %2x ", packet(buffer.Bytes()).trnID())
 	binary.Read(buffer, binary.BigEndian, &hdr.TrnId)
 	binary.Read(buffer, binary.BigEndian, &word)
 	hdr.Response = word & responseMASK
@@ -274,19 +274,57 @@ func parseNBSName(buffer *bytes.Buffer) string {
 	return cleanName
 }
 
-func Print(buffer []byte) {
+//     Bits
+//     0   1   2    3  4   5   6   7   0   2   2   3   4   5   6   7
+//   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+//   | R |    Opcode     |AA |TC |RD |RA | 0 | 0 | B |     Rcode     |
+//   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+// Work in progress - TBD
+type packet []byte
+
+func (p packet) response() byte       { return p[2] >> 7 }
+func (p packet) opcode() byte         { return (p[2] & 0x70) >> 3 }
+func (p packet) flagsBroadcast() byte { return (p[3] & 0x10) >> 4 }
+func (p packet) rcode() byte          { return p[3] & 0x0f }
+
+// 1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
+// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |         NAME_TRN_ID           | OPCODE  |   NM_FLAGS  | RCODE |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |          QDCOUNT              |           ANCOUNT             |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |          NSCOUNT              |           ARCOUNT             |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+func (p packet) trnID() uint16   { return uint16(p[0])<<8 | uint16(p[1]) }
+func (p packet) flags() uint16   { return uint16(p[2])<<8 | uint16(p[3]) }
+func (p packet) qdCount() uint16 { return uint16(p[4])<<8 | uint16(p[5]) }
+func (p packet) anCount() uint16 { return uint16(p[6])<<8 | uint16(p[7]) }
+func (p packet) nsCount() uint16 { return uint16(p[8])<<8 | uint16(p[9]) }
+func (p packet) arCount() uint16 { return uint16(p[10])<<8 | uint16(p[11]) }
+func (p packet) nameLen() uint16 { return uint16(p[12]) }
+
+func printPacket(buffer []byte) {
 	// Examples Netbios name encoding
 	// Lenght = 16 bytes when converted become 32 bytes + len(1) + end(1)
 	// "FRED            "
 	// Hexa: 0x20 EG FC EF EE CA CA CA CA CA CA CA CA CA CA CA CA 0x00
 	fmt.Println("NBNS packet structure")
-	//fmt.Printf("Buffer: %q\n", buffer)
-	fmt.Printf("TrnId 0x%04x | %016b\n", buffer[0]<<8+buffer[1], buffer[2]<<8+buffer[3])
-	fmt.Printf("0x%04x | 0x%04x\n", buffer[4]<<8+buffer[5], buffer[6]<<8+buffer[7])
-	fmt.Printf("0x%04x | 0x%04x\n", buffer[8]<<8+buffer[9], buffer[10]<<8+buffer[11])
-	fmt.Printf("NameLen: %x  Name %q Temination %q \n", buffer[12], buffer[13:13+32], buffer[45])
-	fmt.Printf("0x%04x | 0x%04x\n", buffer[46]<<8+buffer[47], buffer[48]<<8+buffer[49])
-
+	fmt.Printf("Buffer: 0x%02q\n", buffer)
+	p := packet(buffer)
+	fmt.Printf("TrnId 0x%04x\n", p.trnID())
+	fmt.Printf("response %b\n", p.response())
+	fmt.Printf("opcode %b\n", p.opcode())
+	fmt.Printf("flags %016b\n", p.flags())
+	fmt.Printf("  broadcast %v\n", p.flagsBroadcast())
+	fmt.Printf("rcode %b\n", p.rcode())
+	fmt.Printf("QDCount 0x%04x | ANCount 0x%04x\n", p.qdCount(), p.anCount())
+	fmt.Printf("NSCount 0x%04x | ARCount 0x%04x\n", p.nsCount(), p.arCount())
+	if p.nameLen() == netbiosMaxNameLen*2 { //netbios name
+		fmt.Printf("NameLen: %x  Name %q Temination %q \n", buffer[12], buffer[13:13+netbiosMaxNameLen*2], buffer[45])
+	}
+	fmt.Printf("rest of buffer: 0x%04x \n", buffer[46:])
 }
 
 // NewHandler create a NBNS handler
@@ -303,31 +341,48 @@ func NewHandler() (handler *Handler, err error) {
 }
 
 // SendQuery send a NBNS query
-func (h *Handler) SendQuery(ip net.IP) (err error) {
-	targetAddr := &net.UDPAddr{IP: ip, Port: 137}
-	/**
-	dstAddr, err := net.ResolveUDPAddr("udp4", ip+":137")
-	if err != nil {
-		log.Error("NBNS cannot resolve UPD port", err)
-		return err
-	}
+// 4.2.12.  NAME QUERY REQUEST
+//
+//                      1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |         NAME_TRN_ID           |0|  0x0  |0|0|1|0|0 0|B|  0x0  |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |          0x0001               |           0x0000              |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |          0x0000               |           0x0000              |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                                                               |
+// /                         QUESTION_NAME                         /
+// /                                                               /
+// |                                                               |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |           NB (0x0020)         |        IN (0x0001)            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-	conn, err := net.DialUDP("udp", nil, dstAddr)
-	if err != nil {
-		log.Error("NBNS failed to dial UDP port 137 ", err)
-		return err
-	}
-	***/
+func (h *Handler) SendQuery(ip net.IP) (err error) {
+
+	const word = uint16(responseRequest | opcodeQuery | nmflagsBroadcast | rcodeOK)
+
+	// Write variable len byte sequence
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.BigEndian, 0x011) // TrnID
+	binary.Write(buf, binary.BigEndian, word)
+	binary.Write(buf, binary.BigEndian, 1) // QDCount
+	binary.Write(buf, binary.BigEndian, 0) // ANCount
+	binary.Write(buf, binary.BigEndian, 0) // NSCount
+	binary.Write(buf, binary.BigEndian, 0) // ARCount
 
 	// `*` is the discovery name
-	req := newNBNSNameQuery(`*`)
-
-	// Write byte sequence
-	buf := new(bytes.Buffer)
-	req.ToWireFormat(buf)
+	binary.Write(buf, binary.BigEndian, []byte(encodeNetBiosName(`*`)))
+	binary.Write(buf, binary.BigEndian, questionTypeGeneral)    // Qtype
+	binary.Write(buf, binary.BigEndian, questionTypeNodeStatus) // Qtype
+	binary.Write(buf, binary.BigEndian, questionClassInternet)  // QClass
+	// req.ToWireFormat(buf)
 
 	// Print(buf.Bytes())
 
+	targetAddr := &net.UDPAddr{IP: net.IPv4bcast, Port: 137}
 	if _, err = h.conn.WriteToUDP(buf.Bytes(), targetAddr); err != nil {
 		log.Error("NPNS failed to send nbns discovery ", err)
 		return err
@@ -355,7 +410,7 @@ func (h *Handler) ListenAndServe() error {
 
 	// h.conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
 	for !g.Stopping() {
-		_, err := h.conn.Read(readBuffer)
+		_, udpAddr, err := h.conn.ReadFromUDP(readBuffer)
 		if g.Stopping() {
 			return nil
 		}
@@ -388,9 +443,10 @@ func (h *Handler) ListenAndServe() error {
 		}
 
 		// fmt.Println("\nNBNS received packet ")
+		printPacket(readBuffer)
+		log.Info("address IP ", *udpAddr)
 		newPkt := fromWireFormat(bytes.NewBuffer(readBuffer))
-		// Print(readBuffer)
-		// log.Debug("newpkt ", newPkt)
+		log.Info("newpkt ", newPkt)
 
 		nodename := []byte{}
 		for i := range newPkt.NodeNames {
