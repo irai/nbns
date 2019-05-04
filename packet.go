@@ -59,27 +59,6 @@ const (
 
 var sequence uint16 = 1
 
-/******
-
-func newNBNSNameQuery(netbiosName string) (r *nodeStatusPacket) {
-	r = new(nodeStatusPacket)
-
-	r.TrnId = 0x11
-	r.Opcode = opcodeQuery
-	r.NMFlags = 0x00
-	r.Response = responseRequest
-	r.Rcode = 0
-	r.QDCount = 1
-
-	r.QType = questionTypeNodeStatus
-	r.QClass = questionClassInternet
-	r.QName = encodeNBNSName(netbiosName)
-	//fmt.Println("qname -->", r.QName)
-
-	return r
-}
-****/
-
 // encodeNBNSName creates a 34 byte string = 1 char length + 32 char netbios name + 1 final length (0x00).
 //                   Netbios names are 16 bytes long = 15 characters plus space(0x20)
 //
@@ -151,94 +130,6 @@ func decodeNBNSName(buf *bytes.Buffer) (name string) {
 	return strings.TrimRight(name, " ")
 }
 
-/**
-// ToWireFormat creates the byte stream ready to be sent on the wire.
-//
-func (r *nodeStatusPacket) ToWireFormat(buf *bytes.Buffer) error {
-
-	// var word uint16 = r.Response | r.Opcode | r.NMFlags | r.Rcode
-	var word = r.Response | r.Opcode | r.NMFlags | r.Rcode
-
-	binary.Write(buf, binary.BigEndian, r.TrnId)
-	binary.Write(buf, binary.BigEndian, uint16(word))
-	binary.Write(buf, binary.BigEndian, r.QDCount)
-	binary.Write(buf, binary.BigEndian, r.ANCount)
-	binary.Write(buf, binary.BigEndian, r.NSCount)
-	binary.Write(buf, binary.BigEndian, r.ARCount)
-
-	binary.Write(buf, binary.BigEndian, []byte(r.QName))
-	binary.Write(buf, binary.BigEndian, r.QType)
-	binary.Write(buf, binary.BigEndian, r.QClass)
-
-	return nil
-}
-
-func fromWireFormat(buffer *bytes.Buffer) (hdr *nodeStatusPacket) {
-	var word uint16
-
-	hdr = new(nodeStatusPacket)
-	log.Debugf("NBNS trnid %2x ", packet(buffer.Bytes()).trnID())
-	binary.Read(buffer, binary.BigEndian, &hdr.TrnId)
-	binary.Read(buffer, binary.BigEndian, &word)
-	hdr.Response = word & responseMASK
-	hdr.Opcode = word & opcodeMASK
-	hdr.NMFlags = word & nmflagsMASK
-	hdr.Rcode = word & rcodeMASK
-	binary.Read(buffer, binary.BigEndian, &hdr.QDCount)
-	binary.Read(buffer, binary.BigEndian, &hdr.ANCount)
-	binary.Read(buffer, binary.BigEndian, &hdr.NSCount)
-	binary.Read(buffer, binary.BigEndian, &hdr.ARCount)
-
-	log.Debug("NBNS parsed header")
-	log.Debugf("NBNS trnid %2x  mask %16b", hdr.TrnId, word)
-	log.Debugf("NBNS QDCount %2x  ANCount %2x \n", hdr.QDCount, hdr.ANCount)
-	log.Debugf("NBNS NSCount %2x  ARCount %2x \n", hdr.NSCount, hdr.ARCount)
-
-	// Assume a single Question name
-	if hdr.QDCount > 0 {
-		hdr.QName = parseNBSName(buffer)
-		binary.Read(buffer, binary.BigEndian, &hdr.QType)
-		binary.Read(buffer, binary.BigEndian, &hdr.QClass)
-		log.Debugf("NBNS QName %s  QType %2x QClass %2x\n", hdr.QName, hdr.QType, hdr.QClass)
-	}
-
-	// Assume a single Response name
-	if hdr.ANCount > 0 {
-		hdr.RRName = parseNBSName(buffer)
-		binary.Read(buffer, binary.BigEndian, &hdr.RRType)
-		binary.Read(buffer, binary.BigEndian, &hdr.RRClass)
-		log.Debugf("NBNS RRName %s  RRType %2x RRClass %2x\n", hdr.RRName, hdr.RRType, hdr.RRClass)
-	}
-
-	switch hdr.RRType {
-	case questionTypeNodeStatus:
-		binary.Read(buffer, binary.BigEndian, &hdr.Fill)
-		binary.Read(buffer, binary.BigEndian, &hdr.RDLen)
-		binary.Read(buffer, binary.BigEndian, &hdr.NumNames)
-
-		log.Debugf("NBNS RDLen %2x RRClass %2x\n", hdr.RDLen, hdr.NumNames)
-
-		tmp := make([]byte, 16)
-
-		for i := 0; i < int(hdr.NumNames); i++ {
-			var nameFlags uint16
-			binary.Read(buffer, binary.BigEndian, &tmp)
-			binary.Read(buffer, binary.BigEndian, &nameFlags)
-			log.Info("name ", tmp, len(tmp))
-			t := strings.TrimRight(string(tmp), "\x00")
-			log.Info("name00 ", t, len(t))
-			t = strings.Trim(t, " ")
-			log.Info("namenospace ", t, len(t))
-			hdr.NodeNames = append(hdr.NodeNames, t)
-			log.Debugf("NBNS NodeName %q nameFlags %2x\n", t, nameFlags)
-
-		}
-	}
-	return hdr
-
-}
-	***/
-
 //     Bits
 //     0   1   2    3  4   5   6   7   0   2   2   3   4   5   6   7
 //   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
@@ -271,10 +162,6 @@ func (p packet) arCount() uint16 { return uint16(p[10])<<8 | uint16(p[11]) }
 func (p packet) payload() []byte { return p[12:] }
 
 func (p packet) printHeader() {
-	// Examples Netbios name encoding
-	// Lenght = 16 bytes when converted become 32 bytes + len(1) + end(1)
-	// "FRED            "
-	// Hexa: 0x20 EG FC EF EE CA CA CA CA CA CA CA CA CA CA CA CA 0x00
 	fmt.Println("NBNS packet structure")
 	// fmt.Printf("Buffer: 0x%02q\n", p)
 	fmt.Printf("TrnId 0x%04x\n", p.trnID())
