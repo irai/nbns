@@ -1,8 +1,11 @@
 package nbns
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 	"syscall"
 
 	log "github.com/sirupsen/logrus"
@@ -54,7 +57,7 @@ func NewHandler() (handler *Handler, err error) {
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 func (h *Handler) SendQuery(ip net.IP) (err error) {
 
-	packet := nameQueryWireFormat(`*`)
+	packet := nodeStatusRequestWireFormat(`*               `)
 	packet.printHeader()
 
 	if ip == nil || ip.Equal(net.IPv4zero) {
@@ -82,6 +85,25 @@ func (h *Handler) Stop() {
 	GoroutinePool.Stop() // will stop all goroutines
 }
 
+// processNodeStatusResponse
+// 4.2.18.  NODE STATUS RESPONSE
+//                           1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
+//    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |         Header                                                |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   /                            RR_NAME (variable len)             /
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |        NBSTAT (0x0021)        |         IN (0x0001)           |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |                          0x00000000                           |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |          RDLENGTH             |   NUM_NAMES   |               |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+               +
+//   /                         NODE_NAME ARRAY  (variable len)       /
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   /                           STATISTICS      (variable len)      /
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 func (h *Handler) processNameQueryResponse(packet packet, ip net.IP) error {
 
 	log.Debug("nbns received name query packet")
@@ -95,26 +117,38 @@ func (h *Handler) processNameQueryResponse(packet packet, ip net.IP) error {
 	if packet.anCount() <= 0 {
 		return fmt.Errorf("unexpected ancount %v ", packet.anCount())
 	}
-	name := decodeNBNSName(packet.payload())
+
+	// variable len reading
+	buf := bytes.NewBuffer(packet.payload())
+	name := decodeNBNSName(buf)
 	log.Printf("name: |%s|\n", name)
 
-	/**
-	nodename := []byte{}
-	for i := range newPkt.NodeNames {
-		if strings.Contains(newPkt.NodeNames[i], "WORKGROUP") ||
-			strings.Contains(newPkt.NodeNames[i], "__") {
-			continue
-		}
-		log.Infof("nodename = %s  len %v", newPkt.NodeNames[i], len(newPkt.NodeNames[i]))
-		nodename = make([]byte, len(newPkt.NodeNames[i]))
-		copy(nodename, newPkt.NodeNames[i])
-		//nodename = nodename[0:len(newPkt.NodeNames[i])]
-		break
-	}
-	**/
+	var tmp16 uint16
+	var numNames uint8
+	binary.Read(buf, binary.BigEndian, &tmp16)    // type
+	binary.Read(buf, binary.BigEndian, &tmp16)    // internet
+	binary.Read(buf, binary.BigEndian, &tmp16)    // TTL is 32 bits
+	binary.Read(buf, binary.BigEndian, &tmp16)    // TTL
+	binary.Read(buf, binary.BigEndian, &tmp16)    // RDLength
+	binary.Read(buf, binary.BigEndian, &numNames) // numNames
 
+	tmpName := make([]byte, 16)
+	table := []string{}
+	for i := 0; i < int(numNames); i++ {
+		binary.Read(buf, binary.BigEndian, &tmpName)
+		binary.Read(buf, binary.BigEndian, &tmp16) // nameFlags
+		// log.Infof("names %q  nFlags %02x", tmpName, tmp16)
+		if (tmp16 & 0x8000) == 0x00 { // don't add to the table if this is group name
+			t := strings.TrimRight(string(tmpName), " \x00")
+			t = strings.TrimRight(t, " \x03") // not sure why some have 03 at the end
+			t = strings.TrimRight(t, " \x1d") // not sure why some have 1d at the end
+			table = append(table, t)
+		}
+	}
+
+	entry := Entry{IP: ip, Name: table[0]} // first entry
+	log.Info("nodes ", entry.Name, entry.IP, table)
 	if h.notification != nil {
-		entry := Entry{IP: ip, Name: name}
 		log.Debugf("nbns send notification name %s ip %s", entry.Name, entry.IP)
 		h.notification <- entry
 	}

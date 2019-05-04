@@ -60,28 +60,6 @@ const (
 var sequence uint16 = 1
 
 /******
-type nodeStatusPacket struct {
-	TrnId      uint16 // Transaction ID for Name Service Transaction. Requestor places a unique value for each active transaction.
-	Response   uint16
-	Opcode     uint16 // Packet type code, see table below.
-	NMFlags    uint16 // Flags for operation, see table below.
-	Rcode      uint16 // Result codes of request.  Table of Rcode values for each response packet below.
-	QDCount    uint16 // the number of entries in the question section of a Name
-	ANCount    uint16 // number of resource records in the answer section of a Name Service packet.
-	NSCount    uint16 //number of resource records in the authority section of a Name Service packet.
-	ARCount    uint16 //number of resource records in the additional records section of a Name Service packet.
-	QName      string
-	QType      uint16
-	QClass     uint16
-	RRName     string
-	RRType     uint16
-	RRClass    uint16
-	Fill       uint32
-	RDLen      uint16
-	NumNames   uint8
-	NodeNames  []string
-	Statistics []byte
-}
 
 func newNBNSNameQuery(netbiosName string) (r *nodeStatusPacket) {
 	r = new(nodeStatusPacket)
@@ -136,10 +114,12 @@ func encodeNBNSName(name string) string {
 	return string(buffer.Bytes())
 }
 
-func decodeNBNSName(buffer []byte) (name string) {
+func decodeNBNSName(buf *bytes.Buffer) (name string) {
 	// Get the first name.
-	if len(buffer) < netbiosMaxNameLen*2+2 && buffer[netbiosMaxNameLen*2+1] != 0x00 {
-		log.Error("nbns invalid name in packet ", len(buffer), buffer[netbiosMaxNameLen*2+1])
+	tmp := make([]byte, netbiosMaxNameLen*2+2)
+	err := binary.Read(buf, binary.BigEndian, &tmp)
+	if err != nil || tmp[len(tmp)-1] != 0x00 {
+		log.Error("nbns invalid name in packet ", len(buf.Bytes()), buf)
 		return ""
 	}
 
@@ -156,18 +136,19 @@ func decodeNBNSName(buffer []byte) (name string) {
 	//    11xxxxxx -  Label string pointer
 	//    10xxxxxx -  Reserved
 	//    01xxxxxx -  Reserved
-	if buffer[0] != 0x20 {
-		log.Error("nbns unexpected name len in nbns packet", buffer[0])
+	if tmp[0] != 0x20 {
+		log.Error("nbns unexpected name len in nbns packet", tmp[0])
 		return ""
 	}
 
 	// 0 is len; name starts at 1
-	for i := 1; i < 0x21; i = i + 2 {
-		character := ((buffer[i] - 'A') << 4) | (buffer[i+1] - 'A')
+	tmp = tmp[1:]
+	for i := 0; i < 32; i = i + 2 {
+		character := ((tmp[i] - 'A') << 4) | (tmp[i+1] - 'A')
 		name = name + string(character)
 	}
 
-	return name
+	return strings.TrimRight(name, " ")
 }
 
 /**

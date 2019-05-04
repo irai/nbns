@@ -1,6 +1,9 @@
 package nbns
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func Test_encodeNBNSName(t *testing.T) {
 	type args struct {
@@ -14,7 +17,7 @@ func Test_encodeNBNSName(t *testing.T) {
 		// TODO: Add test cases.
 		{name: "test FRED",
 			args: args{name: "FRED"},
-			want: " EGFCEFEECACACACACACACACACACACACAi\x00",
+			want: " EGFCEFEECACACACACACACACACACACACA\x00",
 		},
 	}
 	for _, tt := range tests {
@@ -28,7 +31,7 @@ func Test_encodeNBNSName(t *testing.T) {
 
 func Test_decodeNBNSName(t *testing.T) {
 	type args struct {
-		buffer []byte
+		buffer *bytes.Buffer
 	}
 	tests := []struct {
 		name     string
@@ -36,8 +39,8 @@ func Test_decodeNBNSName(t *testing.T) {
 		wantName string
 	}{
 		{name: "test FRED",
-			args:     args{buffer: []byte(" EGFCEFEECACACACACACACACACACACACA\x00")},
-			wantName: "FRED            ",
+			args:     args{buffer: bytes.NewBuffer([]byte(" EGFCEFEECACACACACACACACACACACACA\x00"))},
+			wantName: "FRED",
 		},
 		// TODO: Add test cases.
 	}

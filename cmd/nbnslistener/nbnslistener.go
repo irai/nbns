@@ -1,14 +1,15 @@
 package main
 
 import (
-	"net"
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/irai/nbns"
-	log "github.com/sirupsen/logrus"
+	"net"
 	"os"
 	"strings"
+
+	"github.com/irai/nbns"
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -16,16 +17,29 @@ func main() {
 
 	setLogLevel("info")
 
-	nbns, err := nbns.NewHandler()
+	handler, err := nbns.NewHandler()
 	if err != nil {
 		log.Fatal("error in nbns", err)
 	}
 
-	go nbns.ListenAndServe()
+	notify := make(chan nbns.Entry)
+	go func() {
+		for {
+			select {
+			// wait for n goroutines to finish
+			case entry := <-notify:
+				log.Info("got new name", entry)
+			}
+		}
+	}()
 
-	cmd(nbns)
+	handler.AddNotificationChannel(notify)
 
-	nbns.Stop()
+	go handler.ListenAndServe()
+
+	cmd(handler)
+
+	handler.Stop()
 
 }
 
