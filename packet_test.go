@@ -14,7 +14,7 @@ func Test_encodeNBNSName(t *testing.T) {
 		// TODO: Add test cases.
 		{name: "test FRED",
 			args: args{name: "FRED"},
-			want: " EGFCEFEECACACACACACACACACACACACA\x00",
+			want: " EGFCEFEECACACACACACACACACACACACAi\x00",
 		},
 	}
 	for _, tt := range tests {

@@ -54,15 +54,18 @@ func NewHandler() (handler *Handler, err error) {
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 func (h *Handler) SendQuery(ip net.IP) (err error) {
 
-	packet := nodeStatusRequestWireFormat(`*`)
+	packet := nameQueryWireFormat(`*`)
 	packet.printHeader()
 
-	if ip == nil {
-		ip = net.IPv4bcast
+	if ip == nil || ip.Equal(net.IPv4zero) {
+		return fmt.Errorf("invalid IP nil %v", ip)
 	}
+	// ip[3] = 255 // Network broadcast
+
+	// To broadcast, use network broadcast i.e 192.168.0.255 for example.
 	targetAddr := &net.UDPAddr{IP: ip, Port: 137}
 	if _, err = h.conn.WriteToUDP(packet, targetAddr); err != nil {
-		log.Error("NPNS failed to send nbns discovery ", err)
+		log.Error("NPNS failed to send nbns packet ", err)
 		return err
 	}
 	return nil
@@ -162,7 +165,6 @@ func (h *Handler) ListenAndServe() error {
 
 		log.Info("nbns received nbns packet from IP ", *udpAddr)
 		packet := packet(readBuffer)
-
 		switch {
 		case packet.opcode() == opcodeQuery && packet.response() == 1:
 			if err := h.processNameQueryResponse(packet, udpAddr.IP); err != nil {

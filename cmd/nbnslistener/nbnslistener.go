@@ -32,7 +32,7 @@ func main() {
 func cmd(h *nbns.Handler) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Println("Command: (q)uit | (s)end ipv4 | (p)rint | (g) loG <level>")
+		fmt.Println("Command: (q)uit | (s)end <192.168.1.255> | (p)rint | (g) loG <level>")
 		fmt.Print("Enter command: ")
 		text, _ := reader.ReadString('\n')
 		text = strings.ToLower(strings.TrimRight(text, "\r\n")) // remove \r\n in windows or \n in linux
@@ -61,10 +61,14 @@ func cmd(h *nbns.Handler) {
 
 		case 's':
 			var ip net.IP
-			if len(text) > 2 {
-				ip = net.ParseIP(text[2:]) // ip = nil if invalid
+			if len(text) < 7 {
+				log.Error("invalid IP. use a v4 address")
+				break
 			}
-			h.SendQuery(ip)
+			ip = net.ParseIP(text[2:]) // ip = nil if invalid
+			if err := h.SendQuery(ip); err != nil {
+				log.Error("error sending packet to ip ", err)
+			}
 
 		case 'p':
 			// h.Print()
