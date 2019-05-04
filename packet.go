@@ -57,6 +57,8 @@ const (
 	questionClassInternet = 0x0001
 )
 
+var sequence uint16 = 1
+
 /******
 type nodeStatusPacket struct {
 	TrnId      uint16 // Transaction ID for Name Service Transaction. Requestor places a unique value for each active transaction.
@@ -285,10 +287,9 @@ func (p packet) qdCount() uint16 { return uint16(p[4])<<8 | uint16(p[5]) }
 func (p packet) anCount() uint16 { return uint16(p[6])<<8 | uint16(p[7]) }
 func (p packet) nsCount() uint16 { return uint16(p[8])<<8 | uint16(p[9]) }
 func (p packet) arCount() uint16 { return uint16(p[10])<<8 | uint16(p[11]) }
-func (p packet) nameLen() uint16 { return uint16(p[12]) }
-func (p packet) payload() []byte { return p[13:] }
+func (p packet) payload() []byte { return p[12:] }
 
-func (p packet) print() {
+func (p packet) printHeader() {
 	// Examples Netbios name encoding
 	// Lenght = 16 bytes when converted become 32 bytes + len(1) + end(1)
 	// "FRED            "
@@ -303,10 +304,6 @@ func (p packet) print() {
 	fmt.Printf("rcode %b\n", p.rcode())
 	fmt.Printf("QDCount 0x%04x | ANCount 0x%04x\n", p.qdCount(), p.anCount())
 	fmt.Printf("NSCount 0x%04x | ARCount 0x%04x\n", p.nsCount(), p.arCount())
-	if p.nameLen() == netbiosMaxNameLen*2 { //netbios name
-		fmt.Printf("NameLen: %x  Name %q Temination %q \n", p[12], p[13:13+netbiosMaxNameLen*2], p[45])
-	}
-	fmt.Printf("rest of buffer: 0x%04x \n", p[46:])
 }
 
 // Node Status Request - Packet layout must be packed with bigendian
@@ -324,26 +321,35 @@ func (p packet) print() {
 //   /                         QUESTION_NAME                         /
 //   |                                                               |
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |         NBSTAT (0x0020)       |        IN (0x0001)            |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+func nameQueryWireFormat(name string) (packet packet) {
+	return query(name, questionTypeGeneral)
+}
+
+// same as name query but type 21
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //   |         NBSTAT (0x0021)       |        IN (0x0001)            |
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-func toNameQueryWireFormat(name string) (packet packet) {
+func nodeStatusRequestWireFormat(name string) (packet packet) {
+	return query(name, questionTypeNodeStatus)
+}
 
+func query(name string, questionType uint16) (packet packet) {
 	const word = uint16(responseRequest | opcodeQuery | nmflagsBroadcast | rcodeOK)
 
 	// Write variable len byte sequence
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.BigEndian, uint16(0x011)) // TrnID
+	sequence++
+	binary.Write(buf, binary.BigEndian, uint16(sequence)) // TrnID
 	binary.Write(buf, binary.BigEndian, uint16(word))
 	binary.Write(buf, binary.BigEndian, uint16(1)) // QDCount
 	binary.Write(buf, binary.BigEndian, uint16(0)) // ANCount
 	binary.Write(buf, binary.BigEndian, uint16(0)) // NSCount
 	binary.Write(buf, binary.BigEndian, uint16(0)) // ARCount
 
-	// `*` is the discovery name
 	binary.Write(buf, binary.BigEndian, []byte(encodeNBNSName(name)))
-	binary.Write(buf, binary.BigEndian, uint16(questionTypeGeneral))    // Qtype
-	binary.Write(buf, binary.BigEndian, uint16(questionTypeNodeStatus)) // Qtype
-	binary.Write(buf, binary.BigEndian, uint16(questionClassInternet))  // QClass
-	// req.ToWireFormat(buf)
+	binary.Write(buf, binary.BigEndian, uint16(questionType))          // Qtype
+	binary.Write(buf, binary.BigEndian, uint16(questionClassInternet)) // QClass
 	return buf.Bytes()
 }

@@ -60,15 +60,14 @@ func cmd(h *nbns.Handler) {
 			log.SetLevel(l)
 
 		case 's':
-			// ip := net.ParseIP(text[2:])
-			// if ip == nil {
-				// log.Error("invalid ip ", text[2:])
-				// break
-			// }
-			h.SendQuery(net.IPv4zero)
+			var ip net.IP
+			if len(text) > 2 {
+				ip = net.ParseIP(text[2:]) // ip = nil if invalid
+			}
+			h.SendQuery(ip)
 
 		case 'p':
-			// c.Print()
+			// h.Print()
 
 		}
 	}
