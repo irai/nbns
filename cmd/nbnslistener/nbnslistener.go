@@ -7,9 +7,14 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/irai/nbns"
 	log "github.com/sirupsen/logrus"
+)
+
+var (
+	netFlag = flag.String("cidr", "192.168.1.1/24", "network to broadcast nbns to")
 )
 
 func main() {
@@ -17,7 +22,12 @@ func main() {
 
 	setLogLevel("info")
 
-	handler, err := nbns.NewHandler()
+	_, network, err := net.ParseCIDR(*netFlag)
+	if err != nil {
+		log.Fatal("invalid CIDR ", err)
+	}
+
+	handler, err := nbns.NewHandler(*network)
 	if err != nil {
 		log.Fatal("error in nbns", err)
 	}
@@ -35,7 +45,7 @@ func main() {
 
 	handler.AddNotificationChannel(notify)
 
-	go handler.ListenAndServe()
+	go handler.ListenAndServe(time.Minute * 1)
 
 	cmd(handler)
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -57,17 +58,15 @@ const (
 	questionClassInternet = 0x0001
 )
 
-var sequence uint16 = 1
+var sequence uint16 = 1 // incremented for every packet sent
 
 // encodeNBNSName creates a 34 byte string = 1 char length + 32 char netbios name + 1 final length (0x00).
-//                   Netbios names are 16 bytes long = 15 characters plus space(0x20)
-//
-//
+// Netbios names are 16 bytes long = 16 characters (two bytes per character)
 func encodeNBNSName(name string) string {
 
-	// Netbios name is limited to 15 characters long
+	// Netbios name is limited to 16 characters long
 	if len(name) > netbiosMaxNameLen {
-		name = name[:netbiosMaxNameLen] // truncate if name too long
+		name = name[:netbiosMaxNameLen-1] // truncate if name too long
 	}
 
 	if len(name) < netbiosMaxNameLen {
@@ -102,8 +101,6 @@ func decodeNBNSName(buf *bytes.Buffer) (name string) {
 		return ""
 	}
 
-	//	fmt.Printf("RR name len %v name % x \n", length, name)
-
 	// A label length count is actually a 6-bit field in the label length
 	// field.  The most significant 2 bits of the field, bits 7 and 6, are
 	// flags allowing an escape from the above compressed representation.
@@ -120,8 +117,7 @@ func decodeNBNSName(buf *bytes.Buffer) (name string) {
 		return ""
 	}
 
-	// 0 is len; name starts at 1
-	tmp = tmp[1:]
+	tmp = tmp[1:] // 0 is len; name starts at 1
 	for i := 0; i < 32; i = i + 2 {
 		character := ((tmp[i] - 'A') << 4) | (tmp[i+1] - 'A')
 		name = name + string(character)
@@ -135,7 +131,6 @@ func decodeNBNSName(buf *bytes.Buffer) (name string) {
 //   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
 //   | R |    Opcode     |AA |TC |RD |RA | 0 | 0 | B |     Rcode     |
 //   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-// Work in progress - TBD
 type packet []byte
 
 func (p packet) response() byte       { return p[2] >> 7 }
@@ -174,7 +169,20 @@ func (p packet) printHeader() {
 	fmt.Printf("NSCount 0x%04x | ARCount 0x%04x\n", p.nsCount(), p.arCount())
 }
 
-// Node Status Request - Packet layout must be packed with bigendian
+// nameQueryWireFormat Name Query Request
+func nameQueryWireFormat(name string) (packet packet) {
+	return query(name, questionTypeGeneral)
+}
+
+// same as name query but type 21
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |         NBSTAT (0x0021)       |        IN (0x0001)            |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+func nodeStatusRequestWireFormat(name string) (packet packet) {
+	return query(name, questionTypeNodeStatus)
+}
+
+// query Packet layout must be packed with bigendian
 //
 //                        1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
 //    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -191,18 +199,6 @@ func (p packet) printHeader() {
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //   |         NBSTAT (0x0020)       |        IN (0x0001)            |
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-func nameQueryWireFormat(name string) (packet packet) {
-	return query(name, questionTypeGeneral)
-}
-
-// same as name query but type 21
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   |         NBSTAT (0x0021)       |        IN (0x0001)            |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-func nodeStatusRequestWireFormat(name string) (packet packet) {
-	return query(name, questionTypeNodeStatus)
-}
-
 func query(name string, questionType uint16) (packet packet) {
 	const word = uint16(responseRequest | opcodeQuery | nmflagsBroadcast | rcodeOK)
 
@@ -220,4 +216,71 @@ func query(name string, questionType uint16) (packet packet) {
 	binary.Write(buf, binary.BigEndian, uint16(questionType))          // Qtype
 	binary.Write(buf, binary.BigEndian, uint16(questionClassInternet)) // QClass
 	return buf.Bytes()
+}
+
+// parseNodeStatusResponse
+// 4.2.18.  NODE STATUS RESPONSE
+//                           1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
+//    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |         Header                                                |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   /                            RR_NAME (variable len)             /
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |        NBSTAT (0x0021)        |         IN (0x0001)           |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |                          0x00000000                           |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   |          RDLENGTH             |   NUM_NAMES   |               |
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+               +
+//   /                         NODE_NAME ARRAY  (variable len)       /
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//   /                           STATISTICS      (variable len)      /
+//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err error) {
+	log.Debug("nbns parsing node status response packet")
+
+	// Assume no questions
+	if packet.qdCount() > 0 {
+		log.Errorf("nbns unexpected qdcount %v ", packet.qdCount())
+	}
+
+	// Assume a single Response name
+	if packet.anCount() <= 0 {
+		return Entry{}, fmt.Errorf("unexpected ancount %v ", packet.anCount())
+	}
+
+	// variable len reading
+	buf := bytes.NewBuffer(packet.payload())
+	name := decodeNBNSName(buf)
+	log.Debugf("nbns name: |%s|\n", name)
+
+	var tmp16 uint16
+	var numNames uint8
+	binary.Read(buf, binary.BigEndian, &tmp16)    // type
+	binary.Read(buf, binary.BigEndian, &tmp16)    // internet
+	binary.Read(buf, binary.BigEndian, &tmp16)    // TTL is 32 bits
+	binary.Read(buf, binary.BigEndian, &tmp16)    // TTL
+	binary.Read(buf, binary.BigEndian, &tmp16)    // RDLength
+	binary.Read(buf, binary.BigEndian, &numNames) // numNames
+
+	tmpName := make([]byte, 16)
+	table := []string{}
+	for i := 0; i < int(numNames); i++ {
+		binary.Read(buf, binary.BigEndian, &tmpName)
+		binary.Read(buf, binary.BigEndian, &tmp16) // nameFlags
+		// log.Infof("names %q  nFlags %02x", tmpName, tmp16)
+		if (tmp16 & 0x8000) == 0x00 { // don't add to the table if this is group name
+			t := strings.TrimRight(string(tmpName), " \x00")
+			t = strings.TrimRight(t, " \x03") // not sure why some have 03 at the end
+			t = strings.TrimRight(t, " \x1d") // not sure why some have 1d at the end
+			table = append(table, t)
+		}
+	}
+
+	entry = Entry{IP: ip, Name: table[0]} // first entry
+	log.Debugf("nbns new entry name %s ip %s", entry.Name, entry.IP)
+	log.Debug("nbns node names ", table)
+
+	return entry, nil
 }
