@@ -16,6 +16,10 @@ type Handler struct {
 	notification  chan<- Entry
 }
 
+// LogAll tells the package to log Info and lower messages
+// Default is to log only Error and Warning; set it to true to log other messages
+var LogAll bool
+
 // Entry holds a NBNS name entry
 type Entry struct {
 	IP   net.IP
@@ -107,7 +111,9 @@ func (h *Handler) ListenAndServe(interval time.Duration) error {
 
 		if err != nil {
 			if err, ok := err.(net.Error); ok && err.Timeout() {
-				log.Debug("NBNS timeout reading result", err)
+				if LogAll {
+					log.Debug("NBNS timeout reading result", err)
+				}
 				continue
 			}
 
@@ -117,12 +123,16 @@ func (h *Handler) ListenAndServe(interval time.Duration) error {
 				if t.Op == "dial" {
 					log.Error("NBNS error unknown host", err)
 				} else if t.Op == "read" {
-					log.Debug("NBNS error conn refused", err)
+					if LogAll {
+						log.Debug("NBNS error conn refused", err)
+					}
 				}
 
 			case syscall.Errno:
 				if t == syscall.ECONNREFUSED {
-					log.Debug("NBNS error connection refused", err)
+					if LogAll {
+						log.Debug("NBNS error connection refused", err)
+					}
 				}
 
 			default:
@@ -135,7 +145,9 @@ func (h *Handler) ListenAndServe(interval time.Duration) error {
 		packet := packet(readBuffer)
 		switch {
 		case packet.opcode() == opcodeQuery && packet.response() == 1:
-			log.Info("nbns received nbns nodeStatusResponse from IP ", *udpAddr)
+			if LogAll {
+				log.Info("nbns received nbns nodeStatusResponse from IP ", *udpAddr)
+			}
 			entry, err := parseNodeStatusResponsePacket(packet, udpAddr.IP)
 			if err != nil {
 				log.Error("error processing nodeStatusResponse ", err)
@@ -143,18 +155,26 @@ func (h *Handler) ListenAndServe(interval time.Duration) error {
 			}
 
 			if h.notification != nil {
-				log.Debugf("nbns send notification name %s ip %s", entry.Name, entry.IP)
+				if LogAll {
+					if LogAll {
+						log.Debugf("nbns send notification name %s ip %s", entry.Name, entry.IP)
+					}
+				}
 				h.notification <- entry
 			}
 
 		case packet.response() == 0:
 			if packet.trnID() != sequence { // ignore our own request
-				log.Info("nbns not implemented - recvd nbns request from IP ", *udpAddr)
+				if LogAll {
+					log.Info("nbns not implemented - recvd nbns request from IP ", *udpAddr)
+				}
 				packet.printHeader()
 			}
 
 		default:
-			log.Infof("nbns not implemented opcode=%v ", packet.opcode())
+			if LogAll {
+				log.Infof("nbns not implemented opcode=%v ", packet.opcode())
+			}
 			packet.printHeader()
 		}
 

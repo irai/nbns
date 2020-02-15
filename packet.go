@@ -87,7 +87,9 @@ func encodeNBNSName(name string) string {
 	// Final name - len 0x00 means no more names
 	buffer.Write([]byte{0x00})
 
-	log.Debugf("NBNS netbios len %v name ->%s\n", len(buffer.Bytes()), string(buffer.Bytes()))
+	if LogAll {
+		log.Debugf("NBNS netbios len %v name ->%s\n", len(buffer.Bytes()), string(buffer.Bytes()))
+	}
 
 	return string(buffer.Bytes())
 }
@@ -157,16 +159,18 @@ func (p packet) arCount() uint16 { return uint16(p[10])<<8 | uint16(p[11]) }
 func (p packet) payload() []byte { return p[12:] }
 
 func (p packet) printHeader() {
-	fmt.Println("NBNS packet structure")
-	// fmt.Printf("Buffer: 0x%02q\n", p)
-	fmt.Printf("TrnId 0x%04x\n", p.trnID())
-	fmt.Printf("response %b\n", p.response())
-	fmt.Printf("opcode %b\n", p.opcode())
-	fmt.Printf("flags %016b\n", p.flags())
-	fmt.Printf("  broadcast %v\n", p.flagsBroadcast())
-	fmt.Printf("rcode %b\n", p.rcode())
-	fmt.Printf("QDCount 0x%04x | ANCount 0x%04x\n", p.qdCount(), p.anCount())
-	fmt.Printf("NSCount 0x%04x | ARCount 0x%04x\n", p.nsCount(), p.arCount())
+	if LogAll {
+		fmt.Println("NBNS packet structure")
+		// fmt.Printf("Buffer: 0x%02q\n", p)
+		fmt.Printf("TrnId 0x%04x\n", p.trnID())
+		fmt.Printf("response %b\n", p.response())
+		fmt.Printf("opcode %b\n", p.opcode())
+		fmt.Printf("flags %016b\n", p.flags())
+		fmt.Printf("  broadcast %v\n", p.flagsBroadcast())
+		fmt.Printf("rcode %b\n", p.rcode())
+		fmt.Printf("QDCount 0x%04x | ANCount 0x%04x\n", p.qdCount(), p.anCount())
+		fmt.Printf("NSCount 0x%04x | ARCount 0x%04x\n", p.nsCount(), p.arCount())
+	}
 }
 
 // nameQueryWireFormat Name Query Request
@@ -238,7 +242,9 @@ func query(name string, questionType uint16) (packet packet) {
 //   /                           STATISTICS      (variable len)      /
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err error) {
-	log.Debug("nbns parsing node status response packet")
+	if LogAll {
+		log.Debug("nbns parsing node status response packet")
+	}
 
 	// Assume no questions
 	if packet.qdCount() > 0 {
@@ -253,7 +259,9 @@ func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err e
 	// variable len reading
 	buf := bytes.NewBuffer(packet.payload())
 	name := decodeNBNSName(buf)
-	log.Debugf("nbns name: |%s|\n", name)
+	if LogAll {
+		log.Debugf("nbns name: |%s|\n", name)
+	}
 
 	var tmp16 uint16
 	var numNames uint8
@@ -279,8 +287,10 @@ func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err e
 	}
 
 	entry = Entry{IP: ip, Name: table[0]} // first entry
-	log.Debugf("nbns new entry name %s ip %s", entry.Name, entry.IP)
-	log.Debug("nbns node names ", table)
+	if LogAll {
+		log.Debugf("nbns new entry name %s ip %s", entry.Name, entry.IP)
+		log.Debug("nbns node names ", table)
+	}
 
 	return entry, nil
 }

@@ -27,6 +27,7 @@ func main() {
 		log.Fatal("invalid CIDR ", err)
 	}
 
+	nbns.LogAll = true
 	handler, err := nbns.NewHandler(*network)
 	if err != nil {
 		log.Fatal("error in nbns", err)
