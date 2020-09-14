@@ -46,7 +46,7 @@ func Test_decodeNBNSName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotName := decodeNBNSName(tt.args.buffer); gotName != tt.wantName {
+			if gotName, _ := decodeNBNSName(tt.args.buffer); gotName != tt.wantName {
 				t.Errorf("decodeNBNSName() = %v, want %v", gotName, tt.wantName)
 			}
 		})

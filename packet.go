@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"strings"
-
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -87,20 +86,22 @@ func encodeNBNSName(name string) string {
 	// Final name - len 0x00 means no more names
 	buffer.Write([]byte{0x00})
 
-	if LogAll {
-		log.Debugf("NBNS netbios len %v name ->%s\n", len(buffer.Bytes()), string(buffer.Bytes()))
+	if Debug {
+		log.Printf("nbns encode netbios name=%s len=%v", string(buffer.Bytes()), len(buffer.Bytes()))
 	}
 
 	return string(buffer.Bytes())
 }
 
-func decodeNBNSName(buf *bytes.Buffer) (name string) {
+func decodeNBNSName(buf *bytes.Buffer) (name string, err error) {
 	// Get the first name.
 	tmp := make([]byte, netbiosMaxNameLen*2+2)
-	err := binary.Read(buf, binary.BigEndian, &tmp)
+	err = binary.Read(buf, binary.BigEndian, &tmp)
 	if err != nil || tmp[len(tmp)-1] != 0x00 {
-		log.Error("nbns invalid name in packet ", len(buf.Bytes()), buf)
-		return ""
+		if Debug {
+			log.Printf("invalid buf=%v", buf)
+		}
+		return "", fmt.Errorf("invalid name len=%v", len(buf.Bytes()))
 	}
 
 	// A label length count is actually a 6-bit field in the label length
@@ -115,8 +116,7 @@ func decodeNBNSName(buf *bytes.Buffer) (name string) {
 	//    10xxxxxx -  Reserved
 	//    01xxxxxx -  Reserved
 	if tmp[0] != 0x20 {
-		log.Error("nbns unexpected name len in nbns packet", tmp[0])
-		return ""
+		return "", fmt.Errorf("unexpected name len=%v", tmp[0])
 	}
 
 	tmp = tmp[1:] // 0 is len; name starts at 1
@@ -125,7 +125,7 @@ func decodeNBNSName(buf *bytes.Buffer) (name string) {
 		name = name + string(character)
 	}
 
-	return strings.TrimRight(name, " ")
+	return strings.TrimRight(name, " "), nil
 }
 
 //     Bits
@@ -159,8 +159,8 @@ func (p packet) arCount() uint16 { return uint16(p[10])<<8 | uint16(p[11]) }
 func (p packet) payload() []byte { return p[12:] }
 
 func (p packet) printHeader() {
-	if LogAll {
-		fmt.Println("NBNS packet structure")
+	if Debug {
+		fmt.Println("nbns packet structure")
 		// fmt.Printf("Buffer: 0x%02q\n", p)
 		fmt.Printf("TrnId 0x%04x\n", p.trnID())
 		fmt.Printf("response %b\n", p.response())
@@ -170,6 +170,11 @@ func (p packet) printHeader() {
 		fmt.Printf("rcode %b\n", p.rcode())
 		fmt.Printf("QDCount 0x%04x | ANCount 0x%04x\n", p.qdCount(), p.anCount())
 		fmt.Printf("NSCount 0x%04x | ARCount 0x%04x\n", p.nsCount(), p.arCount())
+		if p.opcode() == opcodeQuery {
+			buf := bytes.NewBuffer(p.payload())
+			n, _ := decodeNBNSName(buf)
+			fmt.Printf("Name %v\n", n)
+		}
 	}
 }
 
@@ -242,13 +247,13 @@ func query(name string, questionType uint16) (packet packet) {
 //   /                           STATISTICS      (variable len)      /
 //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err error) {
-	if LogAll {
-		log.Debug("nbns parsing node status response packet")
+	if Debug {
+		log.Printf("nbns parsing node status response packet")
 	}
 
 	// Assume no questions
 	if packet.qdCount() > 0 {
-		log.Errorf("nbns unexpected qdcount %v ", packet.qdCount())
+		log.Printf("nbns unexpected questions count=%v", packet.qdCount())
 	}
 
 	// Assume a single Response name
@@ -258,9 +263,12 @@ func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err e
 
 	// variable len reading
 	buf := bytes.NewBuffer(packet.payload())
-	name := decodeNBNSName(buf)
-	if LogAll {
-		log.Debugf("nbns name: |%s|\n", name)
+	name, err := decodeNBNSName(buf)
+	if err != nil {
+		return Entry{}, err
+	}
+	if Debug {
+		log.Printf("nbns name=%s", name)
 	}
 
 	var tmp16 uint16
@@ -287,9 +295,9 @@ func parseNodeStatusResponsePacket(packet packet, ip net.IP) (entry Entry, err e
 	}
 
 	entry = Entry{IP: ip, Name: table[0]} // first entry
-	if LogAll {
-		log.Debugf("nbns new entry name %s ip %s", entry.Name, entry.IP)
-		log.Debug("nbns node names ", table)
+	if Debug {
+		log.Printf("nbns new entry name=%s ip=%s", entry.Name, entry.IP)
+		log.Printf("nbns node names table=%v", table)
 	}
 
 	return entry, nil

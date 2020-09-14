@@ -1,12 +1,12 @@
 package nbns
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log"
 	"net"
-	"syscall"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // Handler create a new NBNS handler
@@ -16,9 +16,9 @@ type Handler struct {
 	notification  chan<- Entry
 }
 
-// LogAll tells the package to log Info and lower messages
+// Debug tells the package to log Info and lower messages
 // Default is to log only Error and Warning; set it to true to log other messages
-var LogAll bool
+var Debug bool
 
 // Entry holds a NBNS name entry
 type Entry struct {
@@ -26,43 +26,45 @@ type Entry struct {
 	Name string
 }
 
-// NewHandler create a NBNS handler
-func NewHandler(network net.IPNet) (handler *Handler, err error) {
+// New create a NBNS handler
+func New(ipNet net.IPNet) (handler *Handler, err error) {
 	// srcAddr, err := net.ResolveUDPAddr("udp4", "127.0.0.1:0")
 
 	handler = &Handler{}
 	if handler.conn, err = net.ListenUDP("udp4", &net.UDPAddr{IP: nil, Port: 137}); err != nil {
-		log.Error("NBNS failed to bind UDP port 137 ", err)
-		return nil, err
+		return nil, fmt.Errorf("nbns failed to bind UDP port 137: %w ", err)
 	}
 
 	// calculate broadcast addr
 	handler.broadcastAddr = net.IP(make([]byte, 4))
-	for i := range network.IP {
-		handler.broadcastAddr[i] = network.IP[i] | ^network.Mask[i]
+	for i := range ipNet.IP {
+		handler.broadcastAddr[i] = ipNet.IP[i] | ^ipNet.Mask[i]
 	}
 	return handler, nil
+}
 
+// Close releases the underlying udp conn
+func (h *Handler) Close() error {
+	return h.conn.Close()
 }
 
 // SendQuery send NBNS node status request query
-func (h *Handler) SendQuery(ip net.IP) (err error) {
+func (h *Handler) SendQuery(ctx context.Context, ip net.IP) (err error) {
 
 	packet := nodeStatusRequestWireFormat(`*               `)
 	// packet.printHeader()
 
 	if ip == nil || ip.Equal(net.IPv4zero) {
-		return fmt.Errorf("invalid IP nil %v", ip)
+		return fmt.Errorf("invalid IP=%v", ip)
 	}
 	// ip[3] = 255 // Network broadcast
 
 	// To broadcast, use network broadcast i.e 192.168.0.255 for example.
 	targetAddr := &net.UDPAddr{IP: ip, Port: 137}
 	if _, err = h.conn.WriteToUDP(packet, targetAddr); err != nil {
-		if !GoroutinePool.Stopping() {
-			log.Error("NPNS failed to send nbns packet ", err)
+		if ctx.Err() == nil { // not cancelled
+			return fmt.Errorf("nbns failed to send packet: %w", err)
 		}
-		return err
 	}
 	return nil
 }
@@ -72,21 +74,17 @@ func (h *Handler) AddNotificationChannel(notification chan<- Entry) {
 	h.notification = notification
 }
 
-// Stop all goroutines
-func (h *Handler) Stop() {
-	h.conn.Close()
-	GoroutinePool.Stop() // will stop all goroutines
-}
-
-func (h *Handler) broadcastLoop(interval time.Duration) {
-	g := GoroutinePool.Begin("nbns broadcastLoop")
-	defer g.End()
+func (h *Handler) broadcastLoop(ctx context.Context, interval time.Duration) error {
+	if Debug {
+		log.Printf("nbns broadcastLoop")
+		defer log.Printf("nbns broadcastLoop terminated")
+	}
 
 	for {
-		h.SendQuery(h.broadcastAddr)
+		h.SendQuery(ctx, h.broadcastAddr)
 		select {
-		case <-GoroutinePool.StopChannel:
-			return
+		case <-ctx.Done():
+			return nil
 
 		case <-time.After(interval):
 		}
@@ -95,69 +93,48 @@ func (h *Handler) broadcastLoop(interval time.Duration) {
 }
 
 // ListenAndServe main listening loop
-func (h *Handler) ListenAndServe(interval time.Duration) error {
-	g := GoroutinePool.Begin("nbns ListenAndServe")
-	defer g.End()
+func (h *Handler) ListenAndServe(ctx context.Context, interval time.Duration) error {
 
-	go h.broadcastLoop(interval)
+	go h.broadcastLoop(ctx, interval)
 
 	readBuffer := make([]byte, 1024)
 
-	for !g.Stopping() {
+	for {
 		_, udpAddr, err := h.conn.ReadFromUDP(readBuffer)
-		if g.Stopping() {
+		if ctx.Err() != nil {
 			return nil
 		}
 
 		if err != nil {
-			if err, ok := err.(net.Error); ok && err.Timeout() {
-				if LogAll {
-					log.Debug("NBNS timeout reading result", err)
-				}
-				continue
-			}
-
-			switch t := err.(type) {
-
-			case *net.OpError:
-				if t.Op == "dial" {
-					log.Error("NBNS error unknown host", err)
-				} else if t.Op == "read" {
-					if LogAll {
-						log.Debug("NBNS error conn refused", err)
+			opErr := &net.OpError{}
+			if errors.As(err, &opErr) {
+				if opErr.Timeout() {
+					if Debug {
+						log.Printf("nbns timeout: %s", err)
 					}
+					continue
 				}
-
-			case syscall.Errno:
-				if t == syscall.ECONNREFUSED {
-					if LogAll {
-						log.Debug("NBNS error connection refused", err)
-					}
-				}
-
-			default:
-				log.Error("NBNS error reading result default", err)
 			}
-
-			return err
+			return fmt.Errorf("nbns error fail to read udp: %w", err)
 		}
 
 		packet := packet(readBuffer)
 		switch {
 		case packet.opcode() == opcodeQuery && packet.response() == 1:
-			if LogAll {
-				log.Info("nbns received nbns nodeStatusResponse from IP ", *udpAddr)
+			if Debug {
+				log.Printf("nbns received nbns response from=%+v", *udpAddr)
 			}
+
 			entry, err := parseNodeStatusResponsePacket(packet, udpAddr.IP)
 			if err != nil {
-				log.Error("error processing nodeStatusResponse ", err)
-				return err
+				log.Printf("nbns error parsing response: %s", err)
+				continue
 			}
 
 			if h.notification != nil {
-				if LogAll {
-					if LogAll {
-						log.Debugf("nbns send notification name %s ip %s", entry.Name, entry.IP)
+				if Debug {
+					if Debug {
+						log.Printf("nbns send notification name %s ip %s", entry.Name, entry.IP)
 					}
 				}
 				h.notification <- entry
@@ -165,20 +142,17 @@ func (h *Handler) ListenAndServe(interval time.Duration) error {
 
 		case packet.response() == 0:
 			if packet.trnID() != sequence { // ignore our own request
-				if LogAll {
-					log.Info("nbns not implemented - recvd nbns request from IP ", *udpAddr)
+				if Debug {
+					log.Printf("nbns not implemented - recvd nbns request from=%+v", *udpAddr)
+					packet.printHeader()
 				}
-				packet.printHeader()
 			}
 
 		default:
-			if LogAll {
-				log.Infof("nbns not implemented opcode=%v ", packet.opcode())
+			log.Printf("nbns not implemented opcode=%v ", packet.opcode())
+			if Debug {
+				packet.printHeader()
 			}
-			packet.printHeader()
 		}
-
 	}
-
-	return nil
 }
